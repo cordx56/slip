@@ -31,7 +31,7 @@ pub fn compile(module_name: &str, prog: Program) -> String {
     module.print_to_string().to_string()
 }
 
-pub fn walk<'a>(context: &'a Context, module: &'a Module<'a>, expr: &Expression) -> Option<fn(&'a Context, &'a Module<'a>, &Expression)> {
+pub fn walk<'ctx>(context: &'ctx Context, module: &Module<'ctx>, expr: &Expression) -> Option<fn(&'ctx Context, &Module<'ctx>, &Expression)> {
     match &expr.atom {
         Some(atom) => {
             match &atom.identifier {
@@ -67,7 +67,7 @@ pub fn walk<'a>(context: &'a Context, module: &'a Module<'a>, expr: &Expression)
     }
 }
 
-pub fn define<'a>(context: &'a Context, module: &'a Module<'a>, expr: &Expression) {
+pub fn define<'ctx>(context: &'ctx Context, module: &Module<'ctx>, expr: &Expression) {
     let i32_type = context.i32_type();
     let return_type = i32_type.fn_type(&[i32_type.into()], false);
     let define_func = module.add_function("test", return_type, None);
