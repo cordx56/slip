@@ -1,6 +1,7 @@
 pub mod define;
 pub mod parser; 
 pub mod compiler;
+pub mod builtin;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Program {

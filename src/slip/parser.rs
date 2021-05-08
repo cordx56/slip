@@ -78,41 +78,53 @@ pub fn expression(s: &str) -> IResult<&str, Expression> {
 }
 
 pub fn list(s: &str) -> IResult<&str, List> {
-    map(
-        delimited(
-            tag(define::LEFT_PARENTHESIS),
-            permutation((
-                expression,
-                many0(
-                    permutation((
-                        multispace1,
-                        expression,
-                    ))
-                )
-            )),
-            tag(define::RIGHT_PARENTHESIS),
+    alt((
+        map(
+            delimited(
+                tag(define::LEFT_PARENTHESIS),
+                permutation((
+                    expression,
+                    many0(
+                        permutation((
+                            multispace1,
+                            expression,
+                        ))
+                    )
+                )),
+                tag(define::RIGHT_PARENTHESIS),
+            ),
+            |(expression, expression_vec)| {
+                let mut expressions = vec![expression];
+                let expr_vec: Vec<Expression> = expression_vec.into_iter().map(|x| x.1).collect();
+                expressions.extend_from_slice(&expr_vec);
+                List { expressions: expressions }
+            }
         ),
-        |(expression, expression_vec)| {
-            let mut expressions = vec![expression];
-            let expr_vec: Vec<Expression> = expression_vec.into_iter().map(|x| x.1).collect();
-            expressions.extend_from_slice(&expr_vec);
-            List { expressions: expressions }
-        }
-    )(s)
+        map(
+            delimited(
+                tag(define::LEFT_PARENTHESIS),
+                multispace0,
+                tag(define::RIGHT_PARENTHESIS),
+            ),
+            |multispace| {
+                List { expressions: Vec::new() }
+            }
+        )
+    ))(s)
 }
 
 pub fn atom(s: &str) -> IResult<&str, Atom> {
     alt((
         map(
-            identifier,
-            |identifier| {
-                Atom { identifier: Some(identifier), constant: None }
-            }
-        ),
-        map(
             constant,
             |constant| {
                 Atom { identifier: None, constant: Some(constant) }
+            }
+        ),
+        map(
+            identifier,
+            |identifier| {
+                Atom { identifier: Some(identifier), constant: None }
             }
         ),
     ))(s)
