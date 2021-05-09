@@ -2,6 +2,12 @@
 slip - Small LIsP compiler project
 
 ## Run
+### Install LLVM 11 using llvmenv
+- install cmake, make, ninja, g++/clang++
+- `cargo install llvmenv`
+- `llvmenv init`
+- `llvmenv build-entry 11.0.0`
+- `set -x LLVM_SYS_110_PREFIX (llvmenv prefix)`
 ### Print test code LLVM IR
 ```bash
 $ cargo run test.slip
@@ -18,6 +24,5 @@ $ cargo run test.slip | lli -
 <expression> ::= <atom> | <list>
 <list>       ::= "(" <expression> (<multispace>+ <expression>)* ")" | "(" <multispace>* ")"
 <atom>       ::= <identifier> | <constant>
-<constant>   ::= <boolean> | <number> | <string>
-<boolean>    ::= "#t" | "#f"
+<constant>   ::= <number> | <string>
 ```

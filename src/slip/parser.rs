@@ -141,33 +141,16 @@ pub fn identifier(s: &str) -> IResult<&str, String> {
 
 pub fn constant(s: &str) -> IResult<&str, Constant> {
     alt((
-        boolean,
         number,
         string,
     ))(s)
-}
-
-pub fn boolean(s: &str) -> IResult<&str, Constant> {
-    map(
-        alt((
-            tag(define::TRUE),
-            tag(define::FALSE),
-        )),
-        |string| {
-            if string == define::TRUE {
-                Constant { boolean: Some(true), number: None, string: None }
-            } else {
-                Constant { boolean: Some(false), number: None, string: None }
-            }
-        }
-    )(s)
 }
 
 pub fn number(s: &str) -> IResult<&str, Constant> {
     map(
         double,
         |number| {
-            Constant { boolean: None, number: Some(number), string: None }
+            Constant { number: Some(number), string: None }
         }
     )(s)
 }
@@ -187,7 +170,7 @@ pub fn string(s: &str) -> IResult<&str, Constant> {
             tag(define::QUOTATION_MARK),
         ),
         |string| {
-            Constant { boolean: None, number: None, string: Some(string) }
+            Constant { number: None, string: Some(string) }
         }
     )(s)
 }

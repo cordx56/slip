@@ -1,4 +1,6 @@
 mod slip;
+use slip::compiler::Compiler;
+use inkwell::context::Context;
 use std::fs;
 use std::io::{
     self,
@@ -47,10 +49,10 @@ fn main() {
             handle.read_to_string(&mut buffer).ok();
         },
     }
-    //let program = slip::parser::program("(print \"こんにちは、世界！\")\n(defun func (arg) (float) float (print \"Hello, world!\") arg)");
-    //let program = slip::parser::program("(print \"こんにちは、世界！\")");
     let program = slip::parser::program(&buffer);
-    let result = slip::compiler::compile("main", program.unwrap().1);
+    let context = Context::create();
+    let mut compiler = Compiler::new(&context, "main");
+    let result = compiler.compile(program.unwrap().1);
     match result {
         Ok(llvmir) => {
             println!("{}", llvmir);
@@ -59,27 +61,4 @@ fn main() {
             eprintln!("{}", e);
         },
     }
-
-    /*
-    let context = Context::create();
-    let module = context.create_module("main");
-    let builder = context.create_builder();
-    let i32_type = context.i32_type();
-
-    let puts_type = i32_type.fn_type(&[i32_type.into()], false);
-    module.add_function("puts", puts_type, None);
-
-    let main_type = i32_type.fn_type(&[i32_type.into()], false);
-    let main_func = module.add_function("main", main_type, None);
-    let basic_block = context.append_basic_block(main_func, "entry");
-    builder.position_at_end(basic_block);
-
-    let fun = module.get_function("puts");
-    builder.build_call(fun.unwrap(), &[i32_type.const_int(40, false).into()], "puts");
-
-    builder.build_return(Some(&i32_type.const_int(0, false)));
-
-    module.print_to_file("test.ll").ok();
-    */
-
 }

@@ -1,7 +1,6 @@
 pub mod define;
 pub mod parser; 
 pub mod compiler;
-pub mod builtin;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Program {
@@ -27,7 +26,6 @@ pub struct Atom {
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Constant {
-    pub boolean: Option<bool>,
     pub number: Option<f64>,
     pub string: Option<String>,
 }
