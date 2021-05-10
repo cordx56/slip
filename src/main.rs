@@ -53,21 +53,28 @@ fn main() {
             handle.read_to_string(&mut buffer).ok();
         },
     }
-    let program = slip::parser::program(&buffer);
-    let context = Context::create();
-    let mut compiler = Compiler::new(&context, "main");
-    let result = compiler.compile(program.unwrap().1);
-    match result {
-        Ok(llvmir) => {
-            if matches.is_present("llvmir") {
-                println!("{}", llvmir);
-            } else {
-                if let Err(e) = compiler.run("main") {
+    match slip::parser::program_all_consuming(&buffer) {
+        Ok(program) => {
+            let context = Context::create();
+            let mut compiler = Compiler::new(&context, "main");
+            let result = compiler.compile(program.1);
+            match result {
+                Ok(llvmir) => {
+                    if matches.is_present("llvmir") {
+                        println!("{}", llvmir);
+                    } else {
+                        if let Err(e) = compiler.run("main") {
+                            eprintln!("{}", e);
+                        }
+                    }
+                },
+                Err(e) => {
                     eprintln!("{}", e);
-                }
+                },
             }
         },
         Err(e) => {
+            eprintln!("Parse error");
             eprintln!("{}", e);
         },
     }

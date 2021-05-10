@@ -45,6 +45,9 @@ use nom::{
     sequence::delimited,
 };
 
+pub fn program_all_consuming(s: &str) -> IResult<&str, Program> {
+    all_consuming(program)(s)
+}
 pub fn program(s: &str) -> IResult<&str, Program> {
     map(
         many0(
