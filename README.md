@@ -8,13 +8,13 @@ slip - Small LIsP compiler project
 - `llvmenv init`
 - `llvmenv build-entry 11.0.0`
 - `set -x LLVM_SYS_110_PREFIX (llvmenv prefix)`
-### Print test code LLVM IR
+### Run test code
 ```bash
 $ cargo run test.slip
 ```
-### Run test code
+### Print test code LLVM IR
 ```bash
-$ cargo run test.slip | lli -
+$ cargo run test.slip --llvmir
 ```
 
 ## Language specification
