@@ -11,6 +11,7 @@ use super::{
 use std::collections::HashMap;
 
 use inkwell::{
+    IntPredicate,
     values::BasicValueEnum,
 };
 
@@ -145,7 +146,7 @@ impl<'ctx> Compiler<'ctx> {
 
     pub fn print(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
         let args_result;
-        match self.get_args(expr, 1) {
+        match self.get_args(expr, 1, None) {
             Ok(args) => args_result = args,
             Err(e) => return Err(e),
         }
@@ -212,7 +213,7 @@ impl<'ctx> Compiler<'ctx> {
 
     pub fn add(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
         let args_result;
-        match self.get_args(expr, 2) {
+        match self.get_args(expr, 2, None) {
             Ok(args) => args_result = args,
             Err(e) => return Err(e),
         }
@@ -267,5 +268,72 @@ impl<'ctx> Compiler<'ctx> {
             self.builder.position_at_end(switch_end_block);
         }
         Ok(self.variable_to_struct(accumulator.into()))
+    }
+
+    pub fn equal(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
+        let func;
+        match self.builder.get_insert_block() {
+            Some(basic_block) => {
+                match basic_block.get_parent() {
+                    Some(parent_func) => func = parent_func,
+                    None => return Err("Get parent function failed"),
+                }
+            },
+            None => return Err("Get basic block failed"),
+        }
+
+        let args_result;
+        match self.get_args(expr, 2, None) {
+            Ok(args) => args_result = args,
+            Err(e) => return Err(e),
+        }
+        let first_arg = args_result[0];
+        if !first_arg.is_struct_value() {
+            return Err("Argument is not struct value")
+        }
+        let first_arg_type_num;
+        match self.builder.build_extract_value(first_arg.into_struct_value(), StructIndex::Type as u32, "type_num") {
+            Some(type_num) => {
+                if !type_num.is_int_value() {
+                    return Err("Struct Type element is not int value")
+                }
+                first_arg_type_num = type_num.into_int_value();
+            },
+            None => return Err("Struct Type element not found"),
+        }
+        for arg in &args_result[1..] {
+            let then_bb = self.context.append_basic_block(func, "if.then");
+            let else_bb = self.context.append_basic_block(func, "if.else");
+            let end_bb = self.context.append_basic_block(func, "if.end");
+            if !arg.is_struct_value() {
+                return Err("Argument is not struct value")
+            }
+            let arg_type_num;
+            match self.builder.build_extract_value(arg.into_struct_value(), StructIndex::Type as u32, "type_num") {
+                Some(type_num) => {
+                    if !type_num.is_int_value() {
+                        return Err("Struct Type element is not int value")
+                    }
+                    arg_type_num = type_num.into_int_value();
+                },
+                None => return Err("Struct Type element not found"),
+            }
+            let type_compare = self.builder.build_int_compare(IntPredicate::EQ, first_arg_type_num, arg_type_num, "type_compare");
+            self.builder.build_conditional_branch(type_compare, then_bb, else_bb);
+            self.builder.position_at_end(then_bb);
+            let basic_blocks;
+            let switch_else_block;
+            let switch_end_block;
+            match self.build_type_switch(*arg) {
+                Ok(bbs) => {
+                    basic_blocks = bbs.0;
+                    switch_else_block = bbs.1;
+                    switch_end_block = bbs.2;
+                },
+                Err(e) => return Err(e),
+            }
+            self.builder.position_at_end(else_bb);
+        }
+        Ok(self.true_value)
     }
 }

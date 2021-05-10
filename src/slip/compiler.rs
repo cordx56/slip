@@ -17,9 +17,6 @@ use inkwell::{
 
     basic_block::BasicBlock,
 
-    values::IntValue,
-    values::FloatValue,
-    values::GlobalValue,
     values::PointerValue,
     values::BasicValueEnum,
 
@@ -28,7 +25,8 @@ use inkwell::{
     types::PointerType,
     types::StructType,
 
-    IntPredicate,
+    OptimizationLevel,
+    execution_engine::FunctionLookupError,
 };
 
 pub enum SlipType {
@@ -121,6 +119,29 @@ impl<'ctx> Compiler<'ctx> {
         Ok(self.module.print_to_string().to_string())
     }
 
+    pub fn run(&self, name: &str) -> Result<(), &'static str> {
+        match self.module.create_jit_execution_engine(OptimizationLevel::Aggressive) {
+            Ok(jitee) => {
+                unsafe {
+                    match jitee.get_function::<unsafe extern "C" fn()>(name) {
+                        Ok(func) => {
+                            func.call();
+                            Ok(())
+                        },
+                        Err(e) => {
+                            if e == FunctionLookupError::JITNotEnabled {
+                                Err("JIT not enabled")
+                            } else {
+                                Err("Function not found")
+                            }
+                        },
+                    }
+                }
+            },
+            Err(_) => Err("JIT execution engine create error"),
+        }
+    }
+
     pub fn walk(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
         match &expr.atom {
             Some(atom) => {
@@ -175,9 +196,11 @@ impl<'ctx> Compiler<'ctx> {
                                                 return self.print(expr)
                                             } else if identifier == define::ADD {
                                                 return self.add(expr)
+                                            } else if identifier == define::EQUAL {
+                                                return self.equal(expr)
                                             } else if let Some(func) = self.module.get_function(identifier) {
                                                 let args_result;
-                                                match self.get_args(expr, 0) {
+                                                match self.get_args(expr, func.count_params() as usize, Some(func.count_params() as usize)) {
                                                     Ok(args) => args_result = args,
                                                     Err(e) => return Err(e),
                                                 }
@@ -233,11 +256,11 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    pub fn get_args(&mut self, expr: &Expression, least_argument_count: usize) -> Result<Vec<BasicValueEnum<'ctx>>, &'static str> {
+    pub fn get_args(&mut self, expr: &Expression, least_argument_count: usize, max_argument_count: Option<usize>) -> Result<Vec<BasicValueEnum<'ctx>>, &'static str> {
         let args;
         match &expr.list.as_ref() {
             Some(list) => {
-                if list.expressions.len() < least_argument_count + 1 {
+                if list.expressions.len() < least_argument_count + 1 || (max_argument_count.is_some() && max_argument_count.unwrap() + 1 < list.expressions.len()) {
                     return Err("Argument length constraint not satisfied")
                 }
                 args = &list.expressions[1..];

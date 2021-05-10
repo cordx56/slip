@@ -21,6 +21,10 @@ fn main() {
         .about("Compile slip code")
         .arg(Arg::with_name("FILE")
              .help("Input file to compile"))
+        .arg(Arg::with_name("llvmir")
+             .long("llvmir")
+             .help("Print LLVM IR")
+             .takes_value(false))
         .get_matches();
     let mut buffer = String::new();
     match matches.value_of("FILE") {
@@ -55,7 +59,13 @@ fn main() {
     let result = compiler.compile(program.unwrap().1);
     match result {
         Ok(llvmir) => {
-            println!("{}", llvmir);
+            if matches.is_present("llvmir") {
+                println!("{}", llvmir);
+            } else {
+                if let Err(e) = compiler.run("main") {
+                    eprintln!("{}", e);
+                }
+            }
         },
         Err(e) => {
             eprintln!("{}", e);

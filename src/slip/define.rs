@@ -19,3 +19,5 @@ pub static PRINT: &str = "print";
 pub static PRINTLN: &str = "println";
 // Arithmetic
 pub static ADD: &str = "+";
+// Compare
+pub static EQUAL: &str = "equal";
