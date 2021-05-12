@@ -85,15 +85,19 @@ pub fn list(s: &str) -> IResult<&str, List> {
         map(
             delimited(
                 tag(define::LEFT_PARENTHESIS),
-                permutation((
-                    expression,
-                    many0(
-                        permutation((
-                            multispace1,
-                            expression,
-                        ))
-                    )
-                )),
+                delimited(
+                    multispace0,
+                    permutation((
+                        expression,
+                        many0(
+                            permutation((
+                                multispace1,
+                                expression,
+                            ))
+                        )
+                    )),
+                    multispace0,
+                ),
                 tag(define::RIGHT_PARENTHESIS),
             ),
             |(expression, expression_vec)| {
@@ -109,7 +113,7 @@ pub fn list(s: &str) -> IResult<&str, List> {
                 multispace0,
                 tag(define::RIGHT_PARENTHESIS),
             ),
-            |multispace| {
+            |_| {
                 List { expressions: Vec::new() }
             }
         )

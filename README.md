@@ -22,7 +22,7 @@ $ cargo run test.slip --llvmir
 ```
 <program>    ::= (<multispace>* <expression> <multispace>*)*
 <expression> ::= <atom> | <list>
-<list>       ::= "(" <expression> (<multispace>+ <expression>)* ")" | "(" <multispace>* ")"
+<list>       ::= "(" <multispace>* <expression> (<multispace>+ <expression>)* <multispace>* ")" | "(" <multispace>* ")"
 <atom>       ::= <identifier> | <constant>
 <constant>   ::= <number> | <string>
 ```
