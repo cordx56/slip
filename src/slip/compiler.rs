@@ -25,6 +25,8 @@ use inkwell::{
     types::PointerType,
     types::StructType,
 
+    IntPredicate,
+
     OptimizationLevel,
     execution_engine::FunctionLookupError,
 };
@@ -102,8 +104,11 @@ impl<'ctx> Compiler<'ctx> {
         let puts_type = self.i32_type.fn_type(&[self.i8_ptr_type.into()], false);
         self.module.add_function("puts", puts_type, None);
         // printf function
-        let puts_type = self.i32_type.fn_type(&[self.i8_ptr_type.into()], true);
-        self.module.add_function("printf", puts_type, None);
+        let printf_type = self.i32_type.fn_type(&[self.i8_ptr_type.into()], true);
+        self.module.add_function("printf", printf_type, None);
+        // strcmp function
+        let strcmp_type = self.i32_type.fn_type(&[self.i8_ptr_type.into(), self.i8_ptr_type.into()], false);
+        self.module.add_function("strcmp", strcmp_type, None);
 
         // main function
         let main_type = self.i32_type.fn_type(&[], false);
@@ -198,7 +203,7 @@ impl<'ctx> Compiler<'ctx> {
                                                 return self.defun(expr)
                                             } else if identifier == define::PRINT {
                                                 return self.print(expr)
-                                            } else if identifier == define::ADD {
+                                            } else if identifier == define::PLUS {
                                                 return self.add(expr)
                                             } else if identifier == define::EQUAL {
                                                 return self.equal(expr)

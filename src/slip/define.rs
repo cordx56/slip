@@ -13,7 +13,9 @@ pub static DEFINE: &str = "define";
 pub static DEFUN: &str = "defun";
 pub static PRINT: &str = "print";
 // Arithmetic
-pub static ADD: &str = "+";
+pub static PLUS: &str = "+";
+pub static ADD: &str = "add";
+pub static MOD: &str = "mod";
 // Compare
 pub static EQUAL: &str = "equal";
 // Branch
