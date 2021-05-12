@@ -1,7 +1,6 @@
 use super::{
     Expression,
 };
-use super::define;
 use super::{
     Compiler,
     SlipType,
@@ -146,7 +145,7 @@ impl<'ctx> Compiler<'ctx> {
 
     pub fn print(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
         let args_result;
-        match self.get_args(expr, 1, None) {
+        match self.get_args_result(expr, 1, None) {
             Ok(args) => args_result = args,
             Err(e) => return Err(e),
         }
@@ -225,16 +224,9 @@ impl<'ctx> Compiler<'ctx> {
 
     pub fn add(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
         let args_result;
-        match self.get_args(expr, 2, None) {
+        match self.get_args_result(expr, 2, None) {
             Ok(args) => args_result = args,
             Err(e) => return Err(e),
-        }
-        let printf_func;
-        match self.module.get_function("printf") {
-            Some(func) => printf_func = func,
-            None => {
-                return Err("printf function not found")
-            }
         }
         let mut accumulator = self.const_named_struct(SlipType::Number, 0.0, None, None);
         for arg in args_result {
@@ -320,7 +312,7 @@ impl<'ctx> Compiler<'ctx> {
         }
 
         let args_result;
-        match self.get_args(expr, 2, None) {
+        match self.get_args_result(expr, 2, None) {
             Ok(args) => args_result = args,
             Err(e) => return Err(e),
         }
@@ -371,5 +363,70 @@ impl<'ctx> Compiler<'ctx> {
             result = phi_value.as_basic_value();
         }
         Ok(result)
+    }
+
+    pub fn if_expr(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
+        let func;
+        match self.builder.get_insert_block() {
+            Some(basic_block) => {
+                match basic_block.get_parent() {
+                    Some(parent_func) => func = parent_func,
+                    None => return Err("Get parent function failed"),
+                }
+            },
+            None => return Err("Get basic block failed"),
+        }
+
+        let args = &expr.list.as_ref().unwrap().expressions[1..];
+        if args.len() < 2 || 3 < args.len() {
+            return Err("If expression takes 2-3 arguments")
+        }
+        let if_result;
+        match self.walk(&args[0]) {
+            Ok(res) => if_result = res,
+            Err(e) => return Err(e),
+        }
+        let if_result_type;
+        match self.build_extract_value_from_struct(&if_result, StructIndex::Type) {
+            Some(type_num) => {
+                if !type_num.is_int_value() {
+                    return Err("Struct Type element is not int value")
+                }
+                if_result_type = type_num.into_int_value();
+            }
+            None => return Err("Struct Type element not found"),
+        }
+        let then_bb = self.context.append_basic_block(func, "if.then");
+        let else_bb = self.context.append_basic_block(func, "if.else");
+        let end_bb = self.context.append_basic_block(func, "if.end");
+        let compare = self.builder.build_int_compare(IntPredicate::EQ, if_result_type, self.i8_type.const_int(SlipType::Nil as u64, false), "compare");
+        self.builder.build_conditional_branch(compare, then_bb, else_bb);
+        // If nil
+        self.builder.position_at_end(then_bb);
+        let nil_result;
+        if args.len() < 3 {
+            nil_result = self.nil_value;
+        } else {
+            match self.walk(&args[2]) {
+                Ok(result) => nil_result = result,
+                Err(e) => return Err(e),
+            }
+        }
+        self.builder.build_unconditional_branch(end_bb);
+        // If else
+        self.builder.position_at_end(else_bb);
+        let true_result;
+        match self.walk(&args[1]) {
+            Ok(result) => true_result = result,
+            Err(e) => return Err(e),
+        }
+        self.builder.build_unconditional_branch(end_bb);
+        self.builder.position_at_end(end_bb);
+        let phi_value = self.builder.build_phi(self.struct_type, "phi");
+        phi_value.add_incoming(&[
+            (&nil_result, then_bb),
+            (&true_result, else_bb),
+        ]);
+        Ok(phi_value.as_basic_value())
     }
 }

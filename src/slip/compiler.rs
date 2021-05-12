@@ -202,9 +202,11 @@ impl<'ctx> Compiler<'ctx> {
                                                 return self.add(expr)
                                             } else if identifier == define::EQUAL {
                                                 return self.equal(expr)
+                                            } else if identifier == define::IF {
+                                                return self.if_expr(expr)
                                             } else if let Some(func) = self.module.get_function(identifier) {
                                                 let args_result;
-                                                match self.get_args(expr, func.count_params() as usize, Some(func.count_params() as usize)) {
+                                                match self.get_args_result(expr, func.count_params() as usize, Some(func.count_params() as usize)) {
                                                     Ok(args) => args_result = args,
                                                     Err(e) => return Err(e),
                                                 }
@@ -268,7 +270,7 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    pub fn get_args(&mut self, expr: &Expression, least_argument_count: usize, max_argument_count: Option<usize>) -> Result<Vec<BasicValueEnum<'ctx>>, &'static str> {
+    pub fn get_args_result(&mut self, expr: &Expression, least_argument_count: usize, max_argument_count: Option<usize>) -> Result<Vec<BasicValueEnum<'ctx>>, &'static str> {
         let args;
         match &expr.list.as_ref() {
             Some(list) => {

@@ -8,16 +8,13 @@ pub static QUOTATION_MARK: &str = "\"";
 pub static TRUE: &str = "t";
 pub static NIL: &str = "nil";
 
-// Type
-pub static FLOAT: &str = "float";
-pub static STRING: &str = "string";
-
 // Function
 pub static DEFINE: &str = "define";
 pub static DEFUN: &str = "defun";
 pub static PRINT: &str = "print";
-pub static PRINTLN: &str = "println";
 // Arithmetic
 pub static ADD: &str = "+";
 // Compare
 pub static EQUAL: &str = "equal";
+// Branch
+pub static IF: &str = "if";
