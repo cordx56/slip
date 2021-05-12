@@ -205,6 +205,8 @@ impl<'ctx> Compiler<'ctx> {
                                                 return self.print(expr)
                                             } else if identifier == define::PLUS {
                                                 return self.add(expr)
+                                            } else if identifier == define::MOD {
+                                                return self.mod_expr(expr)
                                             } else if identifier == define::EQUAL {
                                                 return self.equal(expr)
                                             } else if identifier == define::IF {

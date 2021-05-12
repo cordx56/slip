@@ -373,6 +373,95 @@ impl<'ctx> Compiler<'ctx> {
         Ok(accumulator.into())
     }
 
+    pub fn mod_expr(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
+        if self.module.get_function(define::MOD).is_none() {
+            let before_basic_block = self.builder.get_insert_block();
+            let return_type = self.struct_type.fn_type(&[self.struct_type.into(), self.struct_type.into()], false);
+            // add function
+            let func = self.module.add_function(define::MOD, return_type, None);
+            let basic_block = self.context.append_basic_block(func, "entry");
+            self.builder.position_at_end(basic_block);
+
+            // arguments
+            let func_params = func.get_params();
+            let arg1 = func_params[0];
+            let arg2 = func_params[1];
+
+            // Check type matches
+            let arg1_type;
+            let arg2_type;
+            match self.build_extract_value_from_struct(&arg1, StructIndex::Type) {
+                Some(t) => arg1_type = t,
+                None => return Err("Struct Number element not found"),
+            }
+            match self.build_extract_value_from_struct(&arg2, StructIndex::Type) {
+                Some(t) => arg2_type = t,
+                None => return Err("Struct Number element not found"),
+            }
+            if !arg1_type.is_int_value() || !arg2_type.is_int_value() {
+                return Err("Struct Type element is not int value")
+            }
+            let then_bb = self.context.append_basic_block(func, "if.then");
+            let float_bb = self.context.append_basic_block(func, "if.then");
+            let else_bb = self.context.append_basic_block(func, "if.else");
+            let compare = self.builder.build_int_compare(IntPredicate::EQ, arg1_type.into_int_value(), arg2_type.into_int_value(), "compare");
+            self.builder.build_conditional_branch(compare, then_bb, else_bb);
+            // If type matches
+            self.builder.position_at_end(then_bb);
+            let check_float = self.builder.build_int_compare(IntPredicate::EQ, arg1_type.into_int_value(), self.i8_type.const_int(SlipType::Number as u64, false), "compare");
+            self.builder.build_conditional_branch(compare, float_bb, else_bb);
+
+            self.builder.position_at_end(else_bb);
+            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, Some("Type Error: can't mod"))));
+
+            self.builder.position_at_end(float_bb);
+            let lval;
+            let rval;
+            match self.build_extract_value_from_struct(&arg1, StructIndex::Number) {
+                Some(t) => lval = t,
+                None => return Err("Struct Number element not found"),
+            }
+            match self.build_extract_value_from_struct(&arg2, StructIndex::Number) {
+                Some(t) => rval = t,
+                None => return Err("Struct Number element not found"),
+            }
+            if !lval.is_float_value() || !rval.is_float_value() {
+                return Err("Struct Type element is not int value")
+            }
+            let rem = self.builder.build_float_rem(lval.into_float_value(), rval.into_float_value(), "rem");
+            self.builder.build_return(Some(&self.variable_to_struct(SlipType::Number, rem.into())));
+
+            if let Some(bbb) = before_basic_block {
+                self.builder.position_at_end(bbb);
+            }
+        }
+        let args = &expr.list.as_ref().unwrap().expressions[1..];
+        if args.len() != 2 {
+            return Err("mod expression takes 2 arguments")
+        }
+        let lval;
+        let rval;
+        match self.walk(&args[0]) {
+            Ok(res) => lval = res,
+            Err(e) => return Err(e),
+        }
+        match self.walk(&args[1]) {
+            Ok(res) => rval = res,
+            Err(e) => return Err(e),
+        }
+        match self.module.get_function(define::MOD) {
+            Some(mod_func) => {
+                match self.builder.build_call(mod_func, &[lval, rval], "call_mod").try_as_basic_value().left() {
+                    Some(ret_val) => {
+                        Ok(ret_val)
+                    },
+                    None => return Err("mod function does not return value"),
+                }
+            },
+            None => return Err("mod function not found")
+        }
+    }
+
     pub fn equal(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
         if self.module.get_function(define::EQUAL).is_none() {
             let before_basic_block = self.builder.get_insert_block();
@@ -489,7 +578,6 @@ impl<'ctx> Compiler<'ctx> {
                 None => return Err("Struct Number element not found"),
             }
 
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, Some("Error: can't compare string"))));
             // Switch error
             self.builder.position_at_end(basic_blocks[SlipType::Error as usize]);
             self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, Some("Error: can't compare error"))));
