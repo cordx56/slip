@@ -29,17 +29,21 @@ use inkwell::{
     execution_engine::FunctionLookupError,
 };
 
+#[derive(Debug, PartialEq, Clone)]
 pub enum SlipType {
     Nil    = 0,
     True   = 1,
     Number = 2,
     String = 3,
+    Error  = 4,
 }
 
+#[derive(Debug, PartialEq, Clone)]
 pub enum StructIndex {
     Type   = 0,
     Number = 1,
     String = 2,
+    Error  = 3,
 }
 
 pub struct Compiler<'ctx> {
@@ -73,7 +77,7 @@ impl<'ctx> Compiler<'ctx> {
         let i8_ptr_type = i8_type.ptr_type(inkwell::AddressSpace::Generic);
         let i32_type = context.i32_type();
         let f64_type = context.f64_type();
-        let struct_type = context.struct_type(&[i8_type.into(), f64_type.into(), i8_ptr_type.into()], false);
+        let struct_type = context.struct_type(&[i8_type.into(), f64_type.into(), i8_ptr_type.into(), i8_ptr_type.into()], false);
 
         Compiler {
             context: context,
@@ -88,8 +92,8 @@ impl<'ctx> Compiler<'ctx> {
             f64_type: f64_type,
             struct_type: struct_type,
 
-            nil_value: struct_type.const_named_struct(&[i8_type.const_int(SlipType::Nil as u64, false).into(), f64_type.const_float(0.0).into(), i8_ptr_type.const_null().into()]).into(),
-            true_value: struct_type.const_named_struct(&[i8_type.const_int(SlipType::True as u64, false).into(), f64_type.const_float(0.0).into(), i8_ptr_type.const_null().into()]).into(),
+            nil_value: struct_type.const_named_struct(&[i8_type.const_int(SlipType::Nil as u64, false).into(), f64_type.const_float(0.0).into(), i8_ptr_type.const_null().into(), i8_ptr_type.const_null().into()]).into(),
+            true_value: struct_type.const_named_struct(&[i8_type.const_int(SlipType::True as u64, false).into(), f64_type.const_float(0.0).into(), i8_ptr_type.const_null().into(), i8_ptr_type.const_null().into()]).into(),
         }
     }
 
@@ -163,10 +167,10 @@ impl<'ctx> Compiler<'ctx> {
                         match &atom.constant {
                             Some(constant) => {
                                 match &constant.number {
-                                    Some(number) => Ok(self.struct_type.const_named_struct(&[self.i8_type.const_int(SlipType::Number as u64, false).into(), self.f64_type.const_float(*number).into(), self.i8_ptr_type.const_null().into()]).into()),
+                                    Some(number) => Ok(self.const_named_struct(SlipType::Number, *number, None, None)),
                                     None => {
                                         match &constant.string {
-                                            Some(string) => Ok(self.struct_type.const_named_struct(&[self.i8_type.const_int(SlipType::String as u64, false).into(), self.f64_type.const_float(0.0).into(), self.build_global_string_ptr(string).into()]).into()),
+                                            Some(string) => Ok(self.const_named_struct(SlipType::String, 0.0, Some(string), None)),
                                             None => Err("Constant all None"),
                                         }
                                     },
@@ -226,33 +230,41 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     pub fn search_environment(&self, key: &str) -> Option<BasicValueEnum<'ctx>> {
-        let mut index = self.environment.len() - 1;
-        loop {
-            if let Some(value) = self.environment[index].get(key) {
-                return Some(*value)
-            }
-            if index == 0 {
-                return None
-            }
-            index -= 1;
+        let index = self.environment.len() - 1;
+        if let Some(value) = self.environment[index].get(key) {
+            Some(*value)
+        } else {
+            None
         }
     }
 
-    pub fn variable_to_struct(&self, value: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
+    pub fn const_named_struct(&self, sliptype: SlipType, number: f64, string: Option<&str>, error: Option<&str>) -> BasicValueEnum<'ctx> {
+        self.struct_type.const_named_struct(&[self.i8_type.const_int(sliptype as u64, false).into(), self.f64_type.const_float(number).into(), if string.is_some() { self.build_global_string_ptr(string.unwrap()).into() } else { self.i8_ptr_type.const_null().into() }, if error.is_some() { self.build_global_string_ptr(error.unwrap()).into() } else { self.i8_ptr_type.const_null().into() }]).into()
+    }
+    pub fn variable_to_struct(&self, slip_type: SlipType, value: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
         let struct_alloca = self.builder.build_alloca(self.struct_type, "struct_alloca");
         let struct_load = self.builder.build_load(struct_alloca, "struct_load").into_struct_value();
-        if value.is_float_value() {
+        if slip_type == SlipType::Number {
             let ins1 = self.builder.build_insert_value(struct_load, self.i8_type.const_int(SlipType::Number as u64, false), StructIndex::Type as u32, "insert");
             let ins2 = self.builder.build_insert_value(ins1.unwrap(), value, StructIndex::Number as u32, "insert");
             let ins3 = self.builder.build_insert_value(ins2.unwrap(), self.i8_ptr_type.const_null(), StructIndex::String as u32, "insert");
-            ins3.unwrap().into_struct_value().into()
-        } else if value.is_pointer_value() {
+            let ins4 = self.builder.build_insert_value(ins3.unwrap(), self.i8_ptr_type.const_null(), StructIndex::Error as u32, "insert");
+            ins4.unwrap().into_struct_value().into()
+        } else if slip_type == SlipType::String {
             let ins1 = self.builder.build_insert_value(struct_load, self.i8_type.const_int(SlipType::String as u64, false), StructIndex::Type as u32, "insert");
             let ins2 = self.builder.build_insert_value(ins1.unwrap(), self.f64_type.const_float(0.0), StructIndex::Number as u32, "insert");
             let ins3 = self.builder.build_insert_value(ins2.unwrap(), value, StructIndex::String as u32, "insert");
-            ins3.unwrap().into_struct_value().into()
+            let ins4 = self.builder.build_insert_value(ins3.unwrap(), self.i8_ptr_type.const_null(), StructIndex::Error as u32, "insert");
+            ins4.unwrap().into_struct_value().into()
         } else {
             self.nil_value
+        }
+    }
+    pub fn build_extract_value_from_struct(&self, arg: &BasicValueEnum<'ctx>, struct_index: StructIndex) -> Option<BasicValueEnum<'ctx>> {
+        if arg.is_struct_value() {
+            self.builder.build_extract_value(arg.into_struct_value(), struct_index as u32, "extract")
+        } else {
+            None
         }
     }
 
@@ -288,7 +300,7 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    pub fn build_type_switch(&self, arg: BasicValueEnum<'ctx>) -> Result<(Vec<BasicBlock>, BasicBlock, BasicBlock), &'static str> {
+    pub fn build_type_switch(&self, arg: &BasicValueEnum<'ctx>) -> Result<(Vec<BasicBlock<'ctx>>, BasicBlock<'ctx>, BasicBlock<'ctx>), &'static str> {
         let func;
         match self.builder.get_insert_block() {
             Some(basic_block) => {
@@ -304,6 +316,7 @@ impl<'ctx> Compiler<'ctx> {
         let truebb = self.context.append_basic_block(func, "switch.true");
         let numberbb = self.context.append_basic_block(func, "switch.number");
         let stringbb = self.context.append_basic_block(func, "switch.string");
+        let errorbb = self.context.append_basic_block(func, "switch.error");
         let elsebb = self.context.append_basic_block(func, "switch.else");
         let endbb = self.context.append_basic_block(func, "switch.end");
 
@@ -324,11 +337,12 @@ impl<'ctx> Compiler<'ctx> {
                         (self.i8_type.const_int(SlipType::True as u64, false), truebb),
                         (self.i8_type.const_int(SlipType::Number as u64, false), numberbb),
                         (self.i8_type.const_int(SlipType::String as u64, false), stringbb),
+                        (self.i8_type.const_int(SlipType::Error as u64, false), errorbb),
                     ]
                 );
             },
             None => return Err("Struct Type element not found"),
         }
-        Ok((vec![nilbb, truebb, numberbb, stringbb], elsebb, endbb))
+        Ok((vec![nilbb, truebb, numberbb, stringbb, errorbb], elsebb, endbb))
     }
 }
