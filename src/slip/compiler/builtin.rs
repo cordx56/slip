@@ -225,29 +225,38 @@ impl<'ctx> Compiler<'ctx> {
             self.builder.build_unconditional_branch(switch_end_block);
             // Switch end
             self.builder.position_at_end(switch_end_block);
-            self.builder.build_call(printf_func, &[self.build_global_string_ptr("\n").into()], "call");
+            //self.builder.build_call(printf_func, &[self.build_global_string_ptr("\n").into()], "call");
 
             // return
-            self.builder.build_return(Some(&self.nil_value));
+            self.builder.build_return(Some(&arg));
 
             if let Some(bbb) = before_basic_block {
                 self.builder.position_at_end(bbb);
             }
         }
-        let args_result;
-        match self.get_args_result(expr, 1, None) {
-            Ok(args) => args_result = args,
-            Err(e) => return Err(e),
+        let args = &expr.list.as_ref().unwrap().expressions[1..];
+        if args.len() == 0 {
+            return Err("print expression takes >1 arguments")
         }
-        for arg in args_result {
+        let mut ret_val = self.nil_value;
+        for arg in args {
+            let result;
+            match self.walk(arg) {
+                Ok(res) => result = res,
+                Err(e) => return Err(e),
+            }
             match self.module.get_function(define::PRINT) {
                 Some(print_func) => {
-                    self.builder.build_call(print_func, &[arg], "call_print");
+                    match self.builder.build_call(print_func, &[result], "call_print").try_as_basic_value().left() {
+                        Some(r) => ret_val = r,
+                        None => return Err("print function does not return value"),
+                    }
+                    self.builder.build_call(printf_func, &[self.build_global_string_ptr("\n").into()], "call");
                 },
                 None => return Err("print function not found"),
             }
         }
-        Ok(self.nil_value)
+        Ok(ret_val)
     }
 
     pub fn add(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
