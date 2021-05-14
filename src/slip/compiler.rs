@@ -37,7 +37,8 @@ pub enum SlipType {
     True   = 1,
     Number = 2,
     String = 3,
-    Error  = 4,
+    List   = 4,
+    Error  = 5,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -45,7 +46,15 @@ pub enum StructIndex {
     Type   = 0,
     Number = 1,
     String = 2,
-    Error  = 3,
+    List   = 3,
+    Error  = 4,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum ListNodeStructIndex {
+    Value = 0,
+    Prev  = 1,
+    Next  = 2,
 }
 
 pub struct Compiler<'ctx> {
@@ -62,6 +71,9 @@ pub struct Compiler<'ctx> {
     i32_type: IntType<'ctx>,
     f64_type: FloatType<'ctx>,
     struct_type: StructType<'ctx>,
+    struct_pointer_type: PointerType<'ctx>,
+    list_node_type: StructType<'ctx>,
+    list_node_ptr_type: PointerType<'ctx>,
 
     // Const values
     nil_value: BasicValueEnum<'ctx>,
@@ -79,7 +91,11 @@ impl<'ctx> Compiler<'ctx> {
         let i8_ptr_type = i8_type.ptr_type(inkwell::AddressSpace::Generic);
         let i32_type = context.i32_type();
         let f64_type = context.f64_type();
-        let struct_type = context.struct_type(&[i8_type.into(), f64_type.into(), i8_ptr_type.into(), i8_ptr_type.into()], false);
+        let list_node_type = context.opaque_struct_type("list_node_type");
+        let list_node_ptr_type = list_node_type.ptr_type(inkwell::AddressSpace::Generic);
+        let struct_type = context.struct_type(&[i8_type.into(), f64_type.into(), i8_ptr_type.into(), list_node_ptr_type.into(), i8_ptr_type.into()], false);
+        let struct_pointer_type = struct_type.ptr_type(inkwell::AddressSpace::Generic);
+        list_node_type.set_body(&[struct_type.into(), list_node_ptr_type.into(), list_node_ptr_type.into()], false);
 
         Compiler {
             context: context,
@@ -93,9 +109,12 @@ impl<'ctx> Compiler<'ctx> {
             i32_type: i32_type,
             f64_type: f64_type,
             struct_type: struct_type,
+            struct_pointer_type: struct_pointer_type,
+            list_node_type: list_node_type,
+            list_node_ptr_type: list_node_ptr_type,
 
-            nil_value: struct_type.const_named_struct(&[i8_type.const_int(SlipType::Nil as u64, false).into(), f64_type.const_float(0.0).into(), i8_ptr_type.const_null().into(), i8_ptr_type.const_null().into()]).into(),
-            true_value: struct_type.const_named_struct(&[i8_type.const_int(SlipType::True as u64, false).into(), f64_type.const_float(0.0).into(), i8_ptr_type.const_null().into(), i8_ptr_type.const_null().into()]).into(),
+            nil_value: struct_type.const_named_struct(&[i8_type.const_int(SlipType::Nil as u64, false).into(), f64_type.const_float(0.0).into(), i8_ptr_type.const_null().into(), list_node_ptr_type.const_null().into(), i8_ptr_type.const_null().into()]).into(),
+            true_value: struct_type.const_named_struct(&[i8_type.const_int(SlipType::True as u64, false).into(), f64_type.const_float(0.0).into(), i8_ptr_type.const_null().into(), list_node_ptr_type.const_null().into(), i8_ptr_type.const_null().into()]).into(),
         }
     }
 
@@ -172,10 +191,10 @@ impl<'ctx> Compiler<'ctx> {
                         match &atom.constant {
                             Some(constant) => {
                                 match &constant.number {
-                                    Some(number) => Ok(self.const_named_struct(SlipType::Number, *number, None, None)),
+                                    Some(number) => Ok(self.const_named_struct(SlipType::Number, *number, None, None, None)),
                                     None => {
                                         match &constant.string {
-                                            Some(string) => Ok(self.const_named_struct(SlipType::String, 0.0, Some(string), None)),
+                                            Some(string) => Ok(self.const_named_struct(SlipType::String, 0.0, Some(string), None, None)),
                                             None => Err("Constant all None"),
                                         }
                                     },
@@ -198,19 +217,25 @@ impl<'ctx> Compiler<'ctx> {
                                     match &atom.identifier {
                                         Some(identifier) => {
                                             if identifier == define::DEFINE {
-                                                return self.define(expr)
+                                                self.define(expr)
                                             } else if identifier == define::DEFUN {
-                                                return self.defun(expr)
+                                                self.defun(expr)
                                             } else if identifier == define::PRINT {
-                                                return self.print(expr)
+                                                self.print(expr)
+                                            } else if identifier == define::LIST {
+                                                self.list(expr)
+                                            } else if identifier == define::CAR {
+                                                self.car(expr)
+                                            } else if identifier == define::CDR {
+                                                self.cdr(expr)
                                             } else if identifier == define::PLUS {
-                                                return self.add(expr)
+                                                self.add(expr)
                                             } else if identifier == define::MOD {
-                                                return self.mod_expr(expr)
+                                                self.mod_expr(expr)
                                             } else if identifier == define::EQUAL {
-                                                return self.equal(expr)
+                                                self.equal(expr)
                                             } else if identifier == define::IF {
-                                                return self.if_expr(expr)
+                                                self.if_expr(expr)
                                             } else if let Some(func) = self.module.get_function(identifier) {
                                                 let args_result;
                                                 match self.get_args_result(expr, func.count_params() as usize, Some(func.count_params() as usize)) {
@@ -247,8 +272,16 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    pub fn const_named_struct(&self, sliptype: SlipType, number: f64, string: Option<&str>, error: Option<&str>) -> BasicValueEnum<'ctx> {
-        self.struct_type.const_named_struct(&[self.i8_type.const_int(sliptype as u64, false).into(), self.f64_type.const_float(number).into(), if string.is_some() { self.build_global_string_ptr(string.unwrap()).into() } else { self.i8_ptr_type.const_null().into() }, if error.is_some() { self.build_global_string_ptr(error.unwrap()).into() } else { self.i8_ptr_type.const_null().into() }]).into()
+    pub fn const_named_struct(&self, sliptype: SlipType, number: f64, string: Option<&str>, list_node_ptr: Option<PointerValue<'ctx>>, error: Option<&str>) -> BasicValueEnum<'ctx> {
+        self.struct_type.const_named_struct(&[self.i8_type.const_int(sliptype as u64, false).into(), self.f64_type.const_float(number).into(), if string.is_some() { self.build_global_string_ptr(string.unwrap()).into() } else { self.i8_ptr_type.const_null().into() }, if list_node_ptr.is_some() { list_node_ptr.unwrap().into() } else { self.list_node_ptr_type.const_null().into() }, if error.is_some() { self.build_global_string_ptr(error.unwrap()).into() } else { self.i8_ptr_type.const_null().into() }]).into()
+    }
+    pub fn list_node_struct(&self, value: BasicValueEnum<'ctx>, before: PointerValue<'ctx>, after: PointerValue<'ctx>) -> BasicValueEnum<'ctx> {
+        let struct_alloca = self.builder.build_alloca(self.list_node_type, "struct_alloca");
+        let struct_load = self.builder.build_load(struct_alloca, "struct_load").into_struct_value();
+        let ins1 = self.builder.build_insert_value(struct_load, value, ListNodeStructIndex::Value as u32, "insert");
+        let ins2 = self.builder.build_insert_value(ins1.unwrap(), before, ListNodeStructIndex::Prev as u32, "insert");
+        let ins3 = self.builder.build_insert_value(ins2.unwrap(), after, ListNodeStructIndex::Next as u32, "insert");
+        ins3.unwrap().into_struct_value().into()
     }
     pub fn variable_to_struct(&self, slip_type: SlipType, value: BasicValueEnum<'ctx>) -> BasicValueEnum<'ctx> {
         let struct_alloca = self.builder.build_alloca(self.struct_type, "struct_alloca");
@@ -257,14 +290,23 @@ impl<'ctx> Compiler<'ctx> {
             let ins1 = self.builder.build_insert_value(struct_load, self.i8_type.const_int(SlipType::Number as u64, false), StructIndex::Type as u32, "insert");
             let ins2 = self.builder.build_insert_value(ins1.unwrap(), value, StructIndex::Number as u32, "insert");
             let ins3 = self.builder.build_insert_value(ins2.unwrap(), self.i8_ptr_type.const_null(), StructIndex::String as u32, "insert");
-            let ins4 = self.builder.build_insert_value(ins3.unwrap(), self.i8_ptr_type.const_null(), StructIndex::Error as u32, "insert");
-            ins4.unwrap().into_struct_value().into()
+            let ins4 = self.builder.build_insert_value(ins3.unwrap(), self.list_node_ptr_type.const_null(), StructIndex::List as u32, "insert");
+            let ins5 = self.builder.build_insert_value(ins4.unwrap(), self.i8_ptr_type.const_null(), StructIndex::Error as u32, "insert");
+            ins5.unwrap().into_struct_value().into()
         } else if slip_type == SlipType::String {
             let ins1 = self.builder.build_insert_value(struct_load, self.i8_type.const_int(SlipType::String as u64, false), StructIndex::Type as u32, "insert");
             let ins2 = self.builder.build_insert_value(ins1.unwrap(), self.f64_type.const_float(0.0), StructIndex::Number as u32, "insert");
             let ins3 = self.builder.build_insert_value(ins2.unwrap(), value, StructIndex::String as u32, "insert");
-            let ins4 = self.builder.build_insert_value(ins3.unwrap(), self.i8_ptr_type.const_null(), StructIndex::Error as u32, "insert");
-            ins4.unwrap().into_struct_value().into()
+            let ins4 = self.builder.build_insert_value(ins3.unwrap(), self.list_node_ptr_type.const_null(), StructIndex::List as u32, "insert");
+            let ins5 = self.builder.build_insert_value(ins4.unwrap(), self.i8_ptr_type.const_null(), StructIndex::Error as u32, "insert");
+            ins5.unwrap().into_struct_value().into()
+        } else if slip_type == SlipType::List {
+            let ins1 = self.builder.build_insert_value(struct_load, self.i8_type.const_int(SlipType::List as u64, false), StructIndex::Type as u32, "insert");
+            let ins2 = self.builder.build_insert_value(ins1.unwrap(), self.f64_type.const_float(0.0), StructIndex::Number as u32, "insert");
+            let ins3 = self.builder.build_insert_value(ins2.unwrap(), self.i8_ptr_type.const_null(), StructIndex::String as u32, "insert");
+            let ins4 = self.builder.build_insert_value(ins3.unwrap(), value, StructIndex::List as u32, "insert");
+            let ins5 = self.builder.build_insert_value(ins4.unwrap(), self.i8_ptr_type.const_null(), StructIndex::Error as u32, "insert");
+            ins5.unwrap().into_struct_value().into()
         } else {
             self.nil_value
         }
@@ -275,6 +317,32 @@ impl<'ctx> Compiler<'ctx> {
         } else {
             None
         }
+    }
+    pub fn build_list(&mut self, array: &[BasicValueEnum<'ctx>]) -> Result<BasicValueEnum<'ctx>, &'static str> {
+        if array.len() == 0 {
+            return Ok(self.nil_value)
+        }
+        if !array[0].is_struct_value() {
+            return Err("Element is not struct")
+        }
+        let mut before_elem_ptr = self.list_node_ptr_type.const_null();
+        let mut elem = array[0];
+        let mut elem_ptr = self.builder.build_alloca(self.list_node_type, "struct_alloca");
+        let first_elem_ptr = elem_ptr;
+
+        for after_elem in &array[1..] {
+            if !elem.is_struct_value() {
+                return Err("Element is not struct")
+            }
+            let after_elem_ptr = self.builder.build_alloca(self.list_node_type, "struct_alloca");
+            self.builder.build_store(elem_ptr, self.list_node_struct(elem, before_elem_ptr, after_elem_ptr));
+            elem = *after_elem;
+            before_elem_ptr = elem_ptr;
+            elem_ptr = after_elem_ptr;
+        }
+        self.builder.build_store(elem_ptr, self.list_node_struct(elem, before_elem_ptr, self.list_node_ptr_type.const_null()));
+
+        Ok(self.variable_to_struct(SlipType::List, first_elem_ptr.into()))
     }
 
     pub fn get_args_result(&mut self, expr: &Expression, least_argument_count: usize, max_argument_count: Option<usize>) -> Result<Vec<BasicValueEnum<'ctx>>, &'static str> {
@@ -325,6 +393,7 @@ impl<'ctx> Compiler<'ctx> {
         let truebb = self.context.append_basic_block(func, "switch.true");
         let numberbb = self.context.append_basic_block(func, "switch.number");
         let stringbb = self.context.append_basic_block(func, "switch.string");
+        let listbb = self.context.append_basic_block(func, "switch.list");
         let errorbb = self.context.append_basic_block(func, "switch.error");
         let elsebb = self.context.append_basic_block(func, "switch.else");
         let endbb = self.context.append_basic_block(func, "switch.end");
@@ -346,12 +415,65 @@ impl<'ctx> Compiler<'ctx> {
                         (self.i8_type.const_int(SlipType::True as u64, false), truebb),
                         (self.i8_type.const_int(SlipType::Number as u64, false), numberbb),
                         (self.i8_type.const_int(SlipType::String as u64, false), stringbb),
+                        (self.i8_type.const_int(SlipType::List as u64, false), listbb),
                         (self.i8_type.const_int(SlipType::Error as u64, false), errorbb),
                     ]
                 );
             },
             None => return Err("Struct Type element not found"),
         }
-        Ok((vec![nilbb, truebb, numberbb, stringbb, errorbb], elsebb, endbb))
+        Ok((vec![nilbb, truebb, numberbb, stringbb, listbb, errorbb], elsebb, endbb))
+    }
+
+
+    pub fn build_list_for(&self, arg: &BasicValueEnum<'ctx>) -> Result<(BasicValueEnum<'ctx>, BasicBlock<'ctx>, BasicBlock<'ctx>, BasicBlock<'ctx>, BasicBlock<'ctx>), &'static str> {
+        let func;
+        match self.builder.get_insert_block() {
+            Some(basic_block) => {
+                match basic_block.get_parent() {
+                    Some(parent_func) => func = parent_func,
+                    None => return Err("Get parent function failed"),
+                }
+            },
+            None => return Err("Get basic block failed"),
+        }
+
+        let alloca_next_ptr = self.builder.build_alloca(self.list_node_ptr_type, "alloca_next_ptr");
+        match self.build_extract_value_from_struct(arg, StructIndex::List) {
+            Some(ret_val) => {
+                if !ret_val.is_pointer_value() {
+                    return Err("Struct List element is not pointer value")
+                }
+                self.builder.build_store(alloca_next_ptr, ret_val.into_pointer_value());
+            },
+            None => return Err("Struct List element not found"),
+        }
+        let for_cond_bb = self.context.append_basic_block(func, "for.cond");
+        let for_body_bb = self.context.append_basic_block(func, "for.body");
+        let for_inc_bb = self.context.append_basic_block(func, "for.inc");
+        let for_end_bb = self.context.append_basic_block(func, "for.end");
+        self.builder.position_at_end(for_cond_bb);
+        let elem_ptr = self.builder.build_load(alloca_next_ptr, "load_next_ptr").into_pointer_value();
+        let list_ptr_int = self.builder.build_ptr_to_int(elem_ptr, self.i32_type, "ptr_to_int");
+        let is_null_compare = self.builder.build_int_compare(IntPredicate::EQ, list_ptr_int, self.i32_type.const_int(0, false), "compare");
+        self.builder.build_conditional_branch(is_null_compare, for_end_bb, for_body_bb);
+        self.builder.position_at_end(for_body_bb);
+        let elem = self.builder.build_load(elem_ptr, "load");
+
+        match self.builder.build_extract_value(elem.into_struct_value(), ListNodeStructIndex::Value as u32, "extract") {
+            Some(value) => {
+                self.builder.position_at_end(for_inc_bb);
+                match self.builder.build_extract_value(elem.into_struct_value(), ListNodeStructIndex::Next as u32, "extract") {
+                    Some(r) => {
+                        self.builder.build_store(alloca_next_ptr, r.into_pointer_value());
+                    },
+                    None => return Err("Struct Next element not found"),
+                }
+                self.builder.build_unconditional_branch(for_cond_bb);
+                self.builder.position_at_end(for_end_bb);
+                Ok((value, for_cond_bb, for_body_bb, for_inc_bb, for_end_bb))
+            },
+            None => return Err("Struct Value element not found"),
+        }
     }
 }

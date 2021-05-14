@@ -12,6 +12,10 @@ pub static NIL: &str = "nil";
 pub static DEFINE: &str = "define";
 pub static DEFUN: &str = "defun";
 pub static PRINT: &str = "print";
+// List
+pub static LIST: &str = "list";
+pub static CAR: &str = "car";
+pub static CDR: &str = "cdr";
 // Arithmetic
 pub static PLUS: &str = "+";
 pub static ADD: &str = "add";
