@@ -22,5 +22,6 @@ pub static ADD: &str = "add";
 pub static MOD: &str = "mod";
 // Compare
 pub static EQUAL: &str = "equal";
+pub static EQUALS_SIGN: &str = "=";
 // Branch
 pub static IF: &str = "if";

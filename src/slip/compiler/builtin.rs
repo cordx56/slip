@@ -106,7 +106,7 @@ impl<'ctx> Compiler<'ctx> {
         let before_basic_block = self.builder.get_insert_block();
 
         let mut argument_type = Vec::new();
-        for arg_index in 0..arguments.len() {
+        for _ in 0..arguments.len() {
             argument_type.push(self.struct_type.into());
         }
         let return_type = self.struct_type.fn_type(&argument_type, false);
@@ -393,11 +393,6 @@ impl<'ctx> Compiler<'ctx> {
             // arguments
             let func_params = func.get_params();
             let arg = func_params[0];
-            let node_store_ptr_value = func_params[1];
-            if !node_store_ptr_value.is_pointer_value() {
-                return Err("Node store pointer is not pointer value")
-            }
-            let node_store_ptr = node_store_ptr_value.into_pointer_value();
 
             // Check type matches
             let arg_type;
@@ -464,8 +459,13 @@ impl<'ctx> Compiler<'ctx> {
             self.builder.position_at_end(else_bb);
             let next_node = self.builder.build_load(next_ptr, "next_node_load");
             let new_node = self.builder.build_insert_value(next_node.into_struct_value(), self.list_node_ptr_type.const_null(), ListNodeStructIndex::Prev as u32, "insert_null").unwrap();
-            self.builder.build_store(node_store_ptr, new_node);
-            self.builder.build_return(Some(&self.variable_to_struct(SlipType::List, node_store_ptr_value)));
+            let new_elem_ptr;
+            match self.builder.build_malloc(self.list_node_type, "struct_malloc") {
+                Ok(ptr) => new_elem_ptr = ptr,
+                Err(e) => return Err(e),
+            }
+            self.builder.build_store(new_elem_ptr, new_node);
+            self.builder.build_return(Some(&self.variable_to_struct(SlipType::List, new_elem_ptr.into())));
             // Switch error
             self.builder.position_at_end(basic_blocks[SlipType::Error as usize]);
             self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't cdr error"))));
@@ -489,10 +489,9 @@ impl<'ctx> Compiler<'ctx> {
             Ok(res) => result = res,
             Err(e) => return Err(e),
         }
-        let new_node_ptr = self.builder.build_alloca(self.list_node_ptr_type, "new_node_ptr");
         match self.module.get_function(define::CDR) {
             Some(cdr_func) => {
-                match self.builder.build_call(cdr_func, &[result, new_node_ptr.into()], "call_cdr").try_as_basic_value().left() {
+                match self.builder.build_call(cdr_func, &[result], "call_cdr").try_as_basic_value().left() {
                     Some(ret_val) => Ok(ret_val),
                     None => Err("car function not return value"),
                 }
@@ -665,7 +664,7 @@ impl<'ctx> Compiler<'ctx> {
             // If type matches
             self.builder.position_at_end(then_bb);
             let check_float = self.builder.build_int_compare(IntPredicate::EQ, arg1_type.into_int_value(), self.i8_type.const_int(SlipType::Number as u64, false), "compare");
-            self.builder.build_conditional_branch(compare, float_bb, else_bb);
+            self.builder.build_conditional_branch(check_float, float_bb, else_bb);
 
             self.builder.position_at_end(else_bb);
             self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Type Error: can't mod"))));

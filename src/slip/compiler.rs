@@ -234,6 +234,8 @@ impl<'ctx> Compiler<'ctx> {
                                                 self.mod_expr(expr)
                                             } else if identifier == define::EQUAL {
                                                 self.equal(expr)
+                                            } else if identifier == define::EQUALS_SIGN {
+                                                self.equal(expr)
                                             } else if identifier == define::IF {
                                                 self.if_expr(expr)
                                             } else if let Some(func) = self.module.get_function(identifier) {
@@ -327,14 +329,22 @@ impl<'ctx> Compiler<'ctx> {
         }
         let mut before_elem_ptr = self.list_node_ptr_type.const_null();
         let mut elem = array[0];
-        let mut elem_ptr = self.builder.build_alloca(self.list_node_type, "struct_alloca");
+        let mut elem_ptr;
+        match self.builder.build_malloc(self.list_node_type, "struct_malloc") {
+            Ok(ptr) => elem_ptr = ptr,
+            Err(e) => return Err(e),
+        }
         let first_elem_ptr = elem_ptr;
 
         for after_elem in &array[1..] {
             if !elem.is_struct_value() {
                 return Err("Element is not struct")
             }
-            let after_elem_ptr = self.builder.build_alloca(self.list_node_type, "struct_alloca");
+            let after_elem_ptr;
+            match self.builder.build_malloc(self.list_node_type, "struct_malloc") {
+                Ok(ptr) => after_elem_ptr = ptr,
+                Err(e) => return Err(e),
+            }
             self.builder.build_store(elem_ptr, self.list_node_struct(elem, before_elem_ptr, after_elem_ptr));
             elem = *after_elem;
             before_elem_ptr = elem_ptr;
