@@ -230,6 +230,8 @@ impl<'ctx> Compiler<'ctx> {
                                                 self.cdr(expr)
                                             } else if identifier == define::PLUS {
                                                 self.add(expr)
+                                            } else if identifier == define::MINUS {
+                                                self.sub(expr)
                                             } else if identifier == define::MOD {
                                                 self.mod_expr(expr)
                                             } else if identifier == define::EQUAL {
@@ -387,7 +389,7 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
 
-    pub fn build_type_switch(&self, arg: &BasicValueEnum<'ctx>) -> Result<(Vec<BasicBlock<'ctx>>, BasicBlock<'ctx>, BasicBlock<'ctx>), &'static str> {
+    pub fn build_type_switch(&self, arg: &BasicValueEnum<'ctx>) -> Result<(Vec<BasicBlock<'ctx>>, BasicBlock<'ctx>), &'static str> {
         let func;
         match self.builder.get_insert_block() {
             Some(basic_block) => {
@@ -406,7 +408,6 @@ impl<'ctx> Compiler<'ctx> {
         let listbb = self.context.append_basic_block(func, "switch.list");
         let errorbb = self.context.append_basic_block(func, "switch.error");
         let elsebb = self.context.append_basic_block(func, "switch.else");
-        let endbb = self.context.append_basic_block(func, "switch.end");
 
         let switch;
         if !arg.is_struct_value() {
@@ -432,7 +433,7 @@ impl<'ctx> Compiler<'ctx> {
             },
             None => return Err("Struct Type element not found"),
         }
-        Ok((vec![nilbb, truebb, numberbb, stringbb, listbb, errorbb], elsebb, endbb))
+        Ok((vec![nilbb, truebb, numberbb, stringbb, listbb, errorbb], elsebb))
     }
 
 

@@ -19,6 +19,7 @@ pub static CDR: &str = "cdr";
 // Arithmetic
 pub static PLUS: &str = "+";
 pub static ADD: &str = "add";
+pub static MINUS: &str = "-";
 pub static MOD: &str = "mod";
 // Compare
 pub static EQUAL: &str = "equal";
