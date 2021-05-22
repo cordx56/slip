@@ -290,72 +290,6 @@ impl<'ctx> Compiler<'ctx> {
         self.build_list(&res_vec[..])
     }
     pub fn car(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
-        if self.module.get_function(define::CAR).is_none() {
-            let before_basic_block = self.builder.get_insert_block();
-            let return_type = self.struct_type.fn_type(&[self.struct_type.into()], false);
-            // add function
-            let func = self.module.add_function(define::CAR, return_type, None);
-            let basic_block = self.context.append_basic_block(func, "entry");
-            self.builder.position_at_end(basic_block);
-
-            // arguments
-            let func_params = func.get_params();
-            let arg = func_params[0];
-
-            // Check type matches
-            let arg_type;
-            match self.build_extract_value_from_struct(&arg, StructIndex::Type) {
-                Some(t) => arg_type = t,
-                None => return Err("Struct Number element not found"),
-            }
-            if !arg_type.is_int_value() {
-                return Err("Struct Type element is not int value")
-            }
-            let basic_blocks;
-            let switch_else_block;
-            match self.build_type_switch(&arg) {
-                Ok(bbs) => {
-                    basic_blocks = bbs.0;
-                    switch_else_block = bbs.1;
-                }
-                Err(e) => return Err(e),
-            }
-            // Switch nil
-            self.builder.position_at_end(basic_blocks[SlipType::Nil as usize]);
-            self.builder.build_return(Some(&self.nil_value));
-            // Switch true
-            self.builder.position_at_end(basic_blocks[SlipType::True as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't car t"))));
-            // Switch number
-            self.builder.position_at_end(basic_blocks[SlipType::Number as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't car Number"))));
-            // Switch string
-            self.builder.position_at_end(basic_blocks[SlipType::String as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't car String"))));
-            // Switch list
-            self.builder.position_at_end(basic_blocks[SlipType::List as usize]);
-            let car_ptr;
-            match self.build_extract_value_from_struct(&arg, StructIndex::List) {
-                Some(value) => {
-                    if !value.is_pointer_value() {
-                        return Err("Struct List element is not pointer value")
-                    }
-                    car_ptr = value.into_pointer_value();
-                },
-                None => return Err("Struct List element not found"),
-            }
-            self.builder.build_return(Some(&self.builder.build_load(car_ptr, "car_load")));
-            // Switch error
-            self.builder.position_at_end(basic_blocks[SlipType::Error as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't car error"))));
-            // switch else
-            self.builder.position_at_end(switch_else_block);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: no matched type"))));
-
-            if let Some(bbb) = before_basic_block {
-                self.builder.position_at_end(bbb);
-            }
-        }
         let args = &expr.list.as_ref().unwrap().expressions[1..];
         if args.len() != 1 {
             return Err("car expression takes 1 arguments")
@@ -365,15 +299,82 @@ impl<'ctx> Compiler<'ctx> {
             Ok(res) => result = res,
             Err(e) => return Err(e),
         }
-        match self.module.get_function(define::CAR) {
-            Some(car_func) => {
-                match self.builder.build_call(car_func, &[result], "call_car").try_as_basic_value().left() {
-                    Some(ret_val) => Ok(ret_val),
-                    None => Err("car function not return value"),
+        match self.build_car(&result) {
+            Ok(res) => Ok(res),
+            Err(e) => Err(e),
+        }
+    }
+    fn build_car(&self, arg: &BasicValueEnum<'ctx>) -> Result<BasicValueEnum<'ctx>, &'static str> {
+        let func;
+        match self.builder.get_insert_block() {
+            Some(basic_block) => {
+                match basic_block.get_parent() {
+                    Some(parent_func) => func = parent_func,
+                    None => return Err("Get parent function failed"),
                 }
             },
-            None => Err("car function not found"),
+            None => return Err("Get basic block failed"),
         }
+        let basic_blocks;
+        let switch_else_block;
+        match self.build_type_switch(&arg) {
+            Ok(bbs) => {
+                basic_blocks = bbs.0;
+                switch_else_block = bbs.1;
+            }
+            Err(e) => return Err(e),
+        }
+        let switch_end_block = self.context.append_basic_block(func, "switch.end");
+        // Switch nil
+        self.builder.position_at_end(basic_blocks[SlipType::Nil as usize]);
+        self.builder.build_unconditional_branch(switch_end_block);
+        // Switch true
+        self.builder.position_at_end(basic_blocks[SlipType::True as usize]);
+        self.builder.build_unconditional_branch(switch_end_block);
+        // Switch number
+        self.builder.position_at_end(basic_blocks[SlipType::Number as usize]);
+        self.builder.build_unconditional_branch(switch_end_block);
+        // Switch string
+        self.builder.position_at_end(basic_blocks[SlipType::String as usize]);
+        self.builder.build_unconditional_branch(switch_end_block);
+        // Switch list
+        self.builder.position_at_end(basic_blocks[SlipType::List as usize]);
+        let car_ptr;
+        match self.build_extract_value_from_struct(&arg, StructIndex::List) {
+            Some(value) => {
+                if !value.is_pointer_value() {
+                    return Err("Struct List element is not pointer value")
+                }
+                car_ptr = value.into_pointer_value();
+            },
+            None => return Err("Struct List element not found"),
+        }
+        let car_node = self.builder.build_load(car_ptr, "car_load");
+        let car_value;
+        match self.build_extract_struct_from_list_node(&car_node) {
+            Some(value) => car_value = value,
+            None => return Err("Struct Value element not found"),
+        }
+        self.builder.build_unconditional_branch(switch_end_block);
+        // Switch error
+        self.builder.position_at_end(basic_blocks[SlipType::Error as usize]);
+        self.builder.build_unconditional_branch(switch_end_block);
+        // Switch else
+        self.builder.position_at_end(switch_else_block);
+        self.builder.build_unconditional_branch(switch_end_block);
+        // Switch end
+        self.builder.position_at_end(switch_end_block);
+        let car_phi = self.builder.build_phi(self.struct_type, "car_phi");
+        car_phi.add_incoming(&[
+            (&self.nil_value, basic_blocks[SlipType::Nil as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't car t")), basic_blocks[SlipType::True as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't car Number")), basic_blocks[SlipType::Number as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't car String")), basic_blocks[SlipType::String as usize]),
+            (&car_value, basic_blocks[SlipType::List as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't car Error")), basic_blocks[SlipType::Error as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: no matched type")), switch_else_block),
+        ]);
+        Ok(car_phi.as_basic_value())
     }
     pub fn cdr(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
         let args = &expr.list.as_ref().unwrap().expressions[1..];
@@ -385,12 +386,12 @@ impl<'ctx> Compiler<'ctx> {
             Ok(res) => result = res,
             Err(e) => return Err(e),
         }
-        match self.build_cdr(result) {
+        match self.build_cdr(&result) {
             Ok(res) => Ok(res),
             Err(e) => Err(e),
         }
     }
-    fn build_cdr(&self, arg: BasicValueEnum<'ctx>) -> Result<BasicValueEnum<'ctx>, &'static str> {
+    fn build_cdr(&self, arg: &BasicValueEnum<'ctx>) -> Result<BasicValueEnum<'ctx>, &'static str> {
         let func;
         match self.builder.get_insert_block() {
             Some(basic_block) => {
@@ -623,14 +624,14 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(res) => result = res,
                 Err(e) => return Err(e),
             }
-            match self.build_struct_sub(accumulator, result) {
+            match self.build_struct_sub(&accumulator, &result) {
                 Ok(res) => accumulator = res,
                 Err(e) => return Err(e),
             }
         }
         Ok(accumulator)
     }
-    fn build_struct_sub(&self, arg1: BasicValueEnum<'ctx>, arg2: BasicValueEnum<'ctx>) -> Result<BasicValueEnum<'ctx>, &'static str> {
+    fn build_struct_sub(&self, arg1: &BasicValueEnum<'ctx>, arg2: &BasicValueEnum<'ctx>) -> Result<BasicValueEnum<'ctx>, &'static str> {
         let func;
         match self.builder.get_insert_block() {
             Some(basic_block) => {

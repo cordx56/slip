@@ -322,6 +322,13 @@ impl<'ctx> Compiler<'ctx> {
             None
         }
     }
+    pub fn build_extract_struct_from_list_node(&self, arg: &BasicValueEnum<'ctx>) -> Option<BasicValueEnum<'ctx>> {
+        if arg.is_struct_value() {
+            self.builder.build_extract_value(arg.into_struct_value(), ListNodeStructIndex::Value as u32, "extract")
+        } else {
+            None
+        }
+    }
     pub fn build_list(&mut self, array: &[BasicValueEnum<'ctx>]) -> Result<BasicValueEnum<'ctx>, &'static str> {
         if array.len() == 0 {
             return Ok(self.nil_value)
