@@ -376,104 +376,6 @@ impl<'ctx> Compiler<'ctx> {
         }
     }
     pub fn cdr(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
-        if self.module.get_function(define::CDR).is_none() {
-            let before_basic_block = self.builder.get_insert_block();
-            let return_type = self.struct_type.fn_type(&[self.struct_type.into(), self.list_node_ptr_type.into()], false);
-            // add function
-            let func = self.module.add_function(define::CDR, return_type, None);
-            let basic_block = self.context.append_basic_block(func, "entry");
-            self.builder.position_at_end(basic_block);
-
-            // arguments
-            let func_params = func.get_params();
-            let arg = func_params[0];
-
-            // Check type matches
-            let arg_type;
-            match self.build_extract_value_from_struct(&arg, StructIndex::Type) {
-                Some(t) => arg_type = t,
-                None => return Err("Struct Number element not found"),
-            }
-            if !arg_type.is_int_value() {
-                return Err("Struct Type element is not int value")
-            }
-            let basic_blocks;
-            let switch_else_block;
-            let switch_end_block;
-            match self.build_type_switch(&arg) {
-                Ok(bbs) => {
-                    basic_blocks = bbs.0;
-                    switch_else_block = bbs.1;
-                    switch_end_block = bbs.2;
-                }
-                Err(e) => return Err(e),
-            }
-            // Switch nil
-            self.builder.position_at_end(basic_blocks[SlipType::Nil as usize]);
-            self.builder.build_return(Some(&self.nil_value));
-            // Switch true
-            self.builder.position_at_end(basic_blocks[SlipType::True as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't cdr t"))));
-            // Switch number
-            self.builder.position_at_end(basic_blocks[SlipType::Number as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't cdr Number"))));
-            // Switch string
-            self.builder.position_at_end(basic_blocks[SlipType::String as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't cdr String"))));
-            // Switch list
-            self.builder.position_at_end(basic_blocks[SlipType::List as usize]);
-            let car_ptr;
-            match self.build_extract_value_from_struct(&arg, StructIndex::List) {
-                Some(value) => {
-                    if !value.is_pointer_value() {
-                        return Err("Struct List element is not pointer value")
-                    }
-                    car_ptr = value.into_pointer_value();
-                },
-                None => return Err("Struct List element not found"),
-            }
-            let car = self.builder.build_load(car_ptr, "car_load");
-            let next_ptr;
-            match self.builder.build_extract_value(car.into_struct_value(), ListNodeStructIndex::Next as u32, "extract") {
-                Some(value) => {
-                    if !value.is_pointer_value() {
-                        return Err("Struct Next element is not pointer value")
-                    }
-                    next_ptr = value.into_pointer_value()
-                },
-                None => return Err("Struct Next element not found"),
-            }
-            let next_ptr_int = self.builder.build_ptr_to_int(next_ptr, self.i32_type, "ptr_to_int");
-            let is_null_compare = self.builder.build_int_compare(IntPredicate::EQ, next_ptr_int, self.i32_type.const_int(0, false), "compare");
-            let null_bb = self.context.append_basic_block(func, "if.null");
-            let else_bb = self.context.append_basic_block(func, "else");
-            self.builder.build_conditional_branch(is_null_compare, null_bb, else_bb);
-            self.builder.position_at_end(null_bb);
-            self.builder.build_return(Some(&self.nil_value));
-            self.builder.position_at_end(else_bb);
-            let next_node = self.builder.build_load(next_ptr, "next_node_load");
-            let new_node = self.builder.build_insert_value(next_node.into_struct_value(), self.list_node_ptr_type.const_null(), ListNodeStructIndex::Prev as u32, "insert_null").unwrap();
-            let new_elem_ptr;
-            match self.builder.build_malloc(self.list_node_type, "struct_malloc") {
-                Ok(ptr) => new_elem_ptr = ptr,
-                Err(e) => return Err(e),
-            }
-            self.builder.build_store(new_elem_ptr, new_node);
-            self.builder.build_return(Some(&self.variable_to_struct(SlipType::List, new_elem_ptr.into())));
-            // Switch error
-            self.builder.position_at_end(basic_blocks[SlipType::Error as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't cdr error"))));
-            // switch else
-            self.builder.position_at_end(switch_else_block);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: no matched type"))));
-            // Switch end
-            self.builder.position_at_end(switch_end_block);
-            self.builder.build_return(Some(&self.nil_value));
-
-            if let Some(bbb) = before_basic_block {
-                self.builder.position_at_end(bbb);
-            }
-        }
         let args = &expr.list.as_ref().unwrap().expressions[1..];
         if args.len() != 1 {
             return Err("cdr expression takes 1 arguments")
@@ -483,15 +385,105 @@ impl<'ctx> Compiler<'ctx> {
             Ok(res) => result = res,
             Err(e) => return Err(e),
         }
-        match self.module.get_function(define::CDR) {
-            Some(cdr_func) => {
-                match self.builder.build_call(cdr_func, &[result], "call_cdr").try_as_basic_value().left() {
-                    Some(ret_val) => Ok(ret_val),
-                    None => Err("car function not return value"),
+        match self.build_cdr(result) {
+            Ok(res) => Ok(res),
+            Err(e) => Err(e),
+        }
+    }
+    fn build_cdr(&self, arg: BasicValueEnum<'ctx>) -> Result<BasicValueEnum<'ctx>, &'static str> {
+        let func;
+        match self.builder.get_insert_block() {
+            Some(basic_block) => {
+                match basic_block.get_parent() {
+                    Some(parent_func) => func = parent_func,
+                    None => return Err("Get parent function failed"),
                 }
             },
-            None => Err("car function not found"),
+            None => return Err("Get basic block failed"),
         }
+        let basic_blocks;
+        let switch_else_block;
+        match self.build_type_switch(&arg) {
+            Ok(bbs) => {
+                basic_blocks = bbs.0;
+                switch_else_block = bbs.1;
+            }
+            Err(e) => return Err(e),
+        }
+        let switch_end_block = self.context.append_basic_block(func, "switch.end");
+        // Switch nil
+        self.builder.position_at_end(basic_blocks[SlipType::Nil as usize]);
+        self.builder.build_unconditional_branch(switch_end_block);
+        // Switch true
+        self.builder.position_at_end(basic_blocks[SlipType::True as usize]);
+        self.builder.build_unconditional_branch(switch_end_block);
+        // Switch number
+        self.builder.position_at_end(basic_blocks[SlipType::Number as usize]);
+        self.builder.build_unconditional_branch(switch_end_block);
+        // Switch string
+        self.builder.position_at_end(basic_blocks[SlipType::String as usize]);
+        self.builder.build_unconditional_branch(switch_end_block);
+        // Switch list
+        self.builder.position_at_end(basic_blocks[SlipType::List as usize]);
+        let car_ptr;
+        match self.build_extract_value_from_struct(&arg, StructIndex::List) {
+            Some(value) => {
+                if !value.is_pointer_value() {
+                    return Err("Struct List element is not pointer value")
+                }
+                car_ptr = value.into_pointer_value();
+            },
+            None => return Err("Struct List element not found"),
+        }
+        let car = self.builder.build_load(car_ptr, "car_load");
+        let next_ptr;
+        match self.builder.build_extract_value(car.into_struct_value(), ListNodeStructIndex::Next as u32, "extract") {
+            Some(value) => {
+                if !value.is_pointer_value() {
+                    return Err("Struct Next element is not pointer value")
+                }
+                next_ptr = value.into_pointer_value()
+            },
+            None => return Err("Struct Next element not found"),
+        }
+        let next_ptr_int = self.builder.build_ptr_to_int(next_ptr, self.i32_type, "ptr_to_int");
+        let is_null_compare = self.builder.build_int_compare(IntPredicate::EQ, next_ptr_int, self.i32_type.const_int(0, false), "compare");
+        let null_bb = self.context.append_basic_block(func, "if.null");
+        let else_bb = self.context.append_basic_block(func, "if.else");
+        self.builder.build_conditional_branch(is_null_compare, null_bb, else_bb);
+        self.builder.position_at_end(null_bb);
+        self.builder.build_unconditional_branch(switch_end_block);
+        self.builder.position_at_end(else_bb);
+        let next_node = self.builder.build_load(next_ptr, "next_node_load");
+        let new_node = self.builder.build_insert_value(next_node.into_struct_value(), self.list_node_ptr_type.const_null(), ListNodeStructIndex::Prev as u32, "insert_null").unwrap();
+        let new_elem_ptr;
+        match self.builder.build_malloc(self.list_node_type, "struct_malloc") {
+            Ok(ptr) => new_elem_ptr = ptr,
+            Err(e) => return Err(e),
+        }
+        self.builder.build_store(new_elem_ptr, new_node);
+        let new_struct = self.variable_to_struct(SlipType::List, new_elem_ptr.into());
+        self.builder.build_unconditional_branch(switch_end_block);
+        // Switch error
+        self.builder.position_at_end(basic_blocks[SlipType::Error as usize]);
+        self.builder.build_unconditional_branch(switch_end_block);
+        // switch else
+        self.builder.position_at_end(switch_else_block);
+        self.builder.build_unconditional_branch(switch_end_block);
+
+        self.builder.position_at_end(switch_end_block);
+        let cdr_phi = self.builder.build_phi(self.struct_type, "cdr_phi");
+        cdr_phi.add_incoming(&[
+            (&self.nil_value, basic_blocks[SlipType::Nil as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't cdr t")), basic_blocks[SlipType::True as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't cdr Number")), basic_blocks[SlipType::Number as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't cdr String")), basic_blocks[SlipType::String as usize]),
+            (&self.nil_value, null_bb),
+            (&new_struct, else_bb),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't cdr Error")), basic_blocks[SlipType::Error as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: no matched type")), switch_else_block),
+        ]);
+        Ok(cdr_phi.as_basic_value())
     }
 
 
