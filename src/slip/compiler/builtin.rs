@@ -490,101 +490,6 @@ impl<'ctx> Compiler<'ctx> {
 
     // Arithmetic
     pub fn add(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
-        if self.module.get_function(define::PLUS).is_none() {
-            let before_basic_block = self.builder.get_insert_block();
-            let return_type = self.struct_type.fn_type(&[self.struct_type.into(), self.struct_type.into()], false);
-            // add function
-            let func = self.module.add_function(define::PLUS, return_type, None);
-            let basic_block = self.context.append_basic_block(func, "entry");
-            self.builder.position_at_end(basic_block);
-
-            // arguments
-            let func_params = func.get_params();
-            let arg1 = func_params[0];
-            let arg2 = func_params[1];
-
-            // Check type matches
-            let arg1_type;
-            let arg2_type;
-            match self.build_extract_value_from_struct(&arg1, StructIndex::Type) {
-                Some(t) => arg1_type = t,
-                None => return Err("Struct Number element not found"),
-            }
-            match self.build_extract_value_from_struct(&arg2, StructIndex::Type) {
-                Some(t) => arg2_type = t,
-                None => return Err("Struct Number element not found"),
-            }
-            if !arg1_type.is_int_value() || !arg2_type.is_int_value() {
-                return Err("Struct Type element is not int value")
-            }
-            let then_bb = self.context.append_basic_block(func, "if.then");
-            let else_bb = self.context.append_basic_block(func, "if.else");
-            let end_bb = self.context.append_basic_block(func, "if.end");
-            let compare = self.builder.build_int_compare(IntPredicate::EQ, arg1_type.into_int_value(), arg2_type.into_int_value(), "compare");
-            self.builder.build_conditional_branch(compare, then_bb, else_bb);
-            // If type matches
-            self.builder.position_at_end(then_bb);
-            let basic_blocks;
-            let switch_else_block;
-            match self.build_type_switch(&arg1) {
-                Ok(bbs) => {
-                    basic_blocks = bbs.0;
-                    switch_else_block = bbs.1;
-                }
-                Err(e) => return Err(e),
-            }
-            // Switch nil
-            self.builder.position_at_end(basic_blocks[SlipType::Nil as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't add nil"))));
-            // Switch true
-            self.builder.position_at_end(basic_blocks[SlipType::True as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't add t"))));
-            // Switch number
-            self.builder.position_at_end(basic_blocks[SlipType::Number as usize]);
-            match self.build_extract_value_from_struct(&arg1, StructIndex::Number) {
-                Some(arg1_number) => {
-                    if !arg1_number.is_float_value() {
-                        return Err("Struct Number element is not float value")
-                    }
-                    match self.build_extract_value_from_struct(&arg2, StructIndex::Number) {
-                        Some(arg2_number) => {
-                            if !arg2_number.is_float_value() {
-                                return Err("Struct Number element is not float value")
-                            }
-                            let add = self.builder.build_float_add(arg1_number.into_float_value(), arg2_number.into_float_value(), "add");
-                            let add_res_struct = self.variable_to_struct(SlipType::Number, add.into());
-                            self.builder.build_return(Some(&add_res_struct));
-                        },
-                        None => return Err("Struct Number element not found"),
-                    }
-                },
-                None => return Err("Struct Number element not found"),
-            }
-            // Switch string
-            self.builder.position_at_end(basic_blocks[SlipType::String as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't add string"))));
-            // Switch list
-            self.builder.position_at_end(basic_blocks[SlipType::List as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't add list"))));
-            // Switch error
-            self.builder.position_at_end(basic_blocks[SlipType::Error as usize]);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't add error"))));
-            // switch else
-            self.builder.position_at_end(switch_else_block);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: no matched type"))));
-
-            // If type not matches
-            self.builder.position_at_end(else_bb);
-            self.builder.build_return(Some(&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: type not matched"))));
-
-            // Type matches end
-            self.builder.position_at_end(end_bb);
-            self.builder.build_return(Some(&self.nil_value));
-
-            if let Some(bbb) = before_basic_block {
-                self.builder.position_at_end(bbb);
-            }
-        }
         let args = &expr.list.as_ref().unwrap().expressions[1..];
         if args.len() < 2 {
             return Err("add expression takes >2 arguments")
@@ -596,17 +501,113 @@ impl<'ctx> Compiler<'ctx> {
                 Ok(res) => result = res,
                 Err(e) => return Err(e),
             }
-            match self.module.get_function(define::PLUS) {
-                Some(add_func) => {
-                    match self.builder.build_call(add_func, &[accumulator, result], "call_add").try_as_basic_value().left() {
-                        Some(ret_val) => accumulator = ret_val,
-                        None => return Err("+ function not return value"),
-                    }
-                },
-                None => return Err("+ function not found"),
+            match self.build_struct_add(&accumulator, &result) {
+                Ok(res) => accumulator = res,
+                Err(e) => return Err(e),
             }
         }
         Ok(accumulator.into())
+    }
+    fn build_struct_add(&self, arg1: &BasicValueEnum<'ctx>, arg2: &BasicValueEnum<'ctx>) -> Result<BasicValueEnum<'ctx>, &'static str> {
+        let func;
+        match self.builder.get_insert_block() {
+            Some(basic_block) => {
+                match basic_block.get_parent() {
+                    Some(parent_func) => func = parent_func,
+                    None => return Err("Get parent function failed"),
+                }
+            },
+            None => return Err("Get basic block failed"),
+        }
+        // Check type matches
+        let arg1_type;
+        let arg2_type;
+        match self.build_extract_value_from_struct(&arg1, StructIndex::Type) {
+            Some(t) => arg1_type = t,
+            None => return Err("Struct Number element not found"),
+        }
+        match self.build_extract_value_from_struct(&arg2, StructIndex::Type) {
+            Some(t) => arg2_type = t,
+            None => return Err("Struct Number element not found"),
+        }
+        if !arg1_type.is_int_value() || !arg2_type.is_int_value() {
+            return Err("Struct Type element is not int value")
+        }
+        let then_bb = self.context.append_basic_block(func, "if.then");
+        let else_bb = self.context.append_basic_block(func, "if.else");
+        let end_bb = self.context.append_basic_block(func, "if.end");
+        let compare = self.builder.build_int_compare(IntPredicate::EQ, arg1_type.into_int_value(), arg2_type.into_int_value(), "compare");
+        self.builder.build_conditional_branch(compare, then_bb, else_bb);
+        // If type matches
+        self.builder.position_at_end(then_bb);
+        let basic_blocks;
+        let switch_else_block;
+        match self.build_type_switch(&arg1) {
+            Ok(bbs) => {
+                basic_blocks = bbs.0;
+                switch_else_block = bbs.1;
+            }
+            Err(e) => return Err(e),
+        }
+        // Switch nil
+        self.builder.position_at_end(basic_blocks[SlipType::Nil as usize]);
+        self.builder.build_unconditional_branch(end_bb);
+        // Switch true
+        self.builder.position_at_end(basic_blocks[SlipType::True as usize]);
+        self.builder.build_unconditional_branch(end_bb);
+        // Switch number
+        let add_res_struct;
+        self.builder.position_at_end(basic_blocks[SlipType::Number as usize]);
+        match self.build_extract_value_from_struct(&arg1, StructIndex::Number) {
+            Some(arg1_number) => {
+                if !arg1_number.is_float_value() {
+                    return Err("Struct Number element is not float value")
+                }
+                match self.build_extract_value_from_struct(&arg2, StructIndex::Number) {
+                    Some(arg2_number) => {
+                        if !arg2_number.is_float_value() {
+                            return Err("Struct Number element is not float value")
+                        }
+                        let add = self.builder.build_float_add(arg1_number.into_float_value(), arg2_number.into_float_value(), "add");
+                        add_res_struct = self.variable_to_struct(SlipType::Number, add.into());
+                        self.builder.build_unconditional_branch(end_bb);
+                    },
+                    None => return Err("Struct Number element not found"),
+                }
+            },
+            None => return Err("Struct Number element not found"),
+        }
+        // Switch string
+        self.builder.position_at_end(basic_blocks[SlipType::String as usize]);
+        self.builder.build_unconditional_branch(end_bb);
+        // Switch list
+        self.builder.position_at_end(basic_blocks[SlipType::List as usize]);
+        self.builder.build_unconditional_branch(end_bb);
+        // Switch error
+        self.builder.position_at_end(basic_blocks[SlipType::Error as usize]);
+        self.builder.build_unconditional_branch(end_bb);
+        // switch else
+        self.builder.position_at_end(switch_else_block);
+        self.builder.build_unconditional_branch(end_bb);
+
+        // If type not matches
+        self.builder.position_at_end(else_bb);
+        self.builder.build_unconditional_branch(end_bb);
+
+        // Type matches end
+        self.builder.position_at_end(end_bb);
+        let sub_phi = self.builder.build_phi(self.struct_type, "sub_phi");
+        sub_phi.add_incoming(&[
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't add nil")), basic_blocks[SlipType::Nil as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't add t")), basic_blocks[SlipType::True as usize]),
+            (&add_res_struct, basic_blocks[SlipType::Number as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't add string")), basic_blocks[SlipType::String as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't add list")), basic_blocks[SlipType::List as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: can't add error")), basic_blocks[SlipType::Error as usize]),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: no matched type")), switch_else_block),
+            (&self.const_named_struct(SlipType::Error, 0.0, None, None, Some("Error: type not matched")), else_bb),
+        ]);
+        Ok(sub_phi.as_basic_value())
     }
     pub fn sub(&mut self, expr: &Expression) -> Result<BasicValueEnum<'ctx>, &'static str> {
         let args = &expr.list.as_ref().unwrap().expressions[1..];
